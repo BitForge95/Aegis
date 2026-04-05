@@ -1,138 +1,191 @@
-# 🛡️ Aegis
+# Aegis-AST
 
-### Secure Package Installation via Static Code Verification
+**Zero-trust supply chain security scanner for npm packages.**
 
----
-
-## One-Line Pitch
-
-> **Aegis-AST verifies code truth before execution, stopping supply-chain attacks at install time.**
+[![npm version](https://img.shields.io/npm/v/aegis-ast.svg)](https://www.npmjs.com/package/aegis-ast)
 
 ---
 
-## 🚀 Quick Start
+## The Problem
+
+On March 31, 2026, North Korean state-sponsored actors hijacked the npm account of the lead maintainer of axios (100M+ weekly downloads) and published two malicious versions. The attacker injected `plain-crypto-js` into `package.json`, a dependency that was never imported anywhere in the actual source code. Its sole purpose was to trigger a postinstall hook that deployed a cross-platform RAT targeting SSH keys, CI/CD tokens, and environment variables. npm installed it without question because no tool checks whether a package actually uses what it declares.
+
+Aegis-AST does.
+
+---
+
+## Quick Start
 
 ```bash
-# 1. Install dependencies
+npm i -g aegis-ast
+
+ags scan <package-name>       # full security audit, no install
+ags install <package-name>    # scan first, install only if safe
+ags history <package-name>    # view past scan results
+```
+
+---
+
+## What It Catches
+
+- **Phantom dependencies**  
+  Packages declared in `package.json` but never imported or required anywhere in the source code. Aegis parses the full AST of every source file and cross-references against declared dependencies.
+
+- **Typosquatting and slopsquatting**  
+  Packages with names suspiciously close to popular libraries (e.g., `expresss`, `reacr`, `plain-crypto-js`). Uses Levenshtein distance + Groq AI for classification.
+
+- **Malicious install scripts**  
+  Detects `postinstall` and `preinstall` hooks executing shell commands, downloading payloads, or invoking `eval`.
+
+- **Dangerous code patterns**  
+  Six heuristic scanners detect:
+  - Process execution (`child_process`, `exec`, `spawn`)
+  - Dynamic evaluation (`eval()`, `new Function()`, `vm.runInContext`)
+  - Suspicious network calls (`fetch`, `axios`, `http.request`)
+  - Sensitive file access (`/etc/passwd`, `.ssh`, `.env`)
+  - High-entropy strings (obfuscation, encoded payloads)
+
+- **False positive reduction**  
+  Groq AI validates findings and filters noise (e.g., eval inside docs vs runtime code).
+
+---
+
+## How It Works
+
+```
+ags install <package>
+  |
+  v
+1. Quarantine
+   Download tarball to /tmp sandbox. Nothing touches node_modules yet.
+  |
+  v
+2. AST Phantom Dependency Check [local, <500ms]
+   Extract imports using Babel parser.
+   Cross-reference with package.json.
+  |
+  v
+3. Heuristic Scanners [parallel, <1s]
+   Analyze code for dangerous patterns.
+  |
+  v
+4. Groq AI Analysis [conditional]
+   Typosquat detection + script analysis + false positive reduction.
+  |
+  v
+5. Policy Decision
+   Score > 70 -> BLOCK
+   Score > 40 -> FLAG
+   Score <= 40 -> ALLOW
+```
+
+Clean packages add under ~2 seconds overhead.
+
+---
+
+## Commands
+
+### `ags scan <package>`
+
+Full verbose audit with file paths, line numbers, and code snippets.
+
+```bash
+ags scan axios
+```
+
+---
+
+### `ags install <package>`
+
+Scans then installs based on risk verdict.
+
+```bash
+ags install express
+```
+
+---
+
+### `ags history <package>`
+
+Fetch previous scan results (requires MongoDB).
+
+```bash
+ags history axios
+```
+
+---
+
+## Configuration
+
+Optional environment variables:
+
+```bash
+# Enable Groq AI analysis
+export GROQ_API_KEY=your_key_here
+
+# Enable scan history logging
+export MONGODB_URI=mongodb+srv://user:pass@cluster.mongodb.net/aegis
+
+# Debug mode
+export AEGIS_DEBUG=true
+```
+
+---
+
+## Scoring System
+
+| Category              | Weight | Description |
+|----------------------|--------|-------------|
+| Phantom dependency   | +50    | Declared but unused |
+| Exec/spawn           | +35    | Process execution |
+| Eval/Function        | +30    | Dynamic evaluation |
+| Network              | +25    | External calls |
+| Filesystem           | +25    | Sensitive file access |
+| Entropy              | +20    | Obfuscated strings |
+| Groq typosquat       | +30    | Name mimic detection |
+| Groq script          | +30    | Malicious script confirmation |
+
+### Thresholds
+
+- **> 70 → BLOCK**
+- **> 40 → FLAG**
+- **≤ 40 → ALLOW**
+
+---
+
+## Example Output
+
+### Clean package
+
+```bash
+$ ags install chalk
+
+chalk@5.4.1 -- Score: 0 -- ALLOWED
+Installing...
+```
+
+
+---
+
+## Tech Stack
+
+- TypeScript
+- Babel Parser + Traverse
+- Parallel heuristic scanners
+- Groq AI
+- MongoDB Atlas
+- Commander.js + Chalk
+
+---
+
+## Development
+
+```bash
+git clone https://github.com/YOUR_USERNAME/aegis-ast.git
+cd aegis-ast
 npm install
-
-# 2. Build
 npm run build
-
-# 3. Run in development mode
-npm run dev
-
-# 4. Or run the CLI directly
-npx ts-node src/main.ts install axios
+node dist/main.js scan chalk
 ```
 
 ---
-
-## 📁 Project Structure
-
-```
-aegis/
-├── src/
-│   ├── main.ts                 # CLI entry point (Person 4)
-│   ├── types/
-│   │   └── index.ts            # 🔒 Shared type contracts (DO NOT modify alone)
-│   ├── core/
-│   │   ├── index.ts            # Barrel export
-│   │   ├── fetcher.ts          # Package fetcher (Person 1)
-│   │   ├── imports.ts          # Import extractor (Person 1)
-│   │   ├── comparator.ts       # Dependency comparator (Person 1)
-│   │   ├── risk_engine.ts      # Risk scoring (Person 3)
-│   │   └── policy.ts           # Decision engine (Person 3)
-│   ├── scanner/
-│   │   ├── index.ts            # Barrel export
-│   │   ├── scripts.ts          # Script scanner (Person 2)
-│   │   ├── network.ts          # Network detection (Person 2)
-│   │   ├── entropy.ts          # Entropy detection (Person 2)
-│   │   ├── fs_access.ts        # FS access detection (Person 2)
-│   │   ├── exec.ts             # Exec detection (Person 2)
-│   │   └── eval.ts             # Eval detection (Person 2)
-│   └── utils/
-│       ├── index.ts            # Barrel export
-│       ├── logger.ts           # MongoDB logger (Person 3)
-│       └── file_walker.ts      # 🔧 Shared file walker (IMPLEMENTED)
-├── tests/
-│   └── comparator.test.ts      # Example test
-├── package.json
-├── tsconfig.json
-├── jest.config.js
-├── .env.example
-├── .gitignore
-└── README.md
-```
-
----
-
-## 👥 Team Ownership
-
-| Person | Role | Files |
-|--------|------|-------|
-| **P1** | Core Engine | `fetcher.ts`, `imports.ts`, `comparator.ts` |
-| **P2** | Security Detection | `scripts.ts`, `network.ts`, `entropy.ts`, `fs_access.ts`, `exec.ts`, `eval.ts` |
-| **P3** | Risk Engine + Backend | `risk_engine.ts`, `policy.ts`, `logger.ts` |
-| **P4** | CLI + Demo + UX | `main.ts`, demo setup, dashboard |
-
----
-
-## 🔗 Integration Contract
-
-### Input to Risk Engine (all signals merged)
-
-```json
-{
-  "phantom": [],
-  "scripts": [],
-  "network": [],
-  "entropy": [],
-  "fs": [],
-  "exec": [],
-  "eval": []
-}
-```
-
-### Output from Policy Engine
-
-```json
-{
-  "score": 85,
-  "decision": "BLOCK",
-  "reasons": ["Phantom dependencies detected: evil-pkg"]
-}
-```
-
----
-
-## ⚙️ Environment Variables
-
-Copy `.env.example` to `.env` and configure:
-
-```bash
-cp .env.example .env
-```
-
-| Variable | Description |
-|----------|-------------|
-| `MONGODB_URI` | MongoDB Atlas connection string |
-| `GEMINI_API_KEY` | (Optional) Gemini API key |
-| `NPM_REGISTRY_URL` | npm registry URL (default: registry.npmjs.org) |
-
----
-
-## 🧪 Testing
-
-```bash
-npm test
-```
-
----
-
-## 🎤 Demo Flow
-
-1. `npm install axios` → compromised package gets through
-2. `aegis install axios` → **BLOCKED** by Aegis
-3. Show scan reasons and risk breakdown
-4. (Optional) View dashboard
